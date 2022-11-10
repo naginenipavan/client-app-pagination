@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="d3ad4a25-e251-4473-8213-2bc24ea54d1b" >
+		<http:listener-connection host="0.0.0.0" port="8082" />
+	</http:listener-config>
+	
+	<vm:config name="VM_Config" doc:name="VM Config" doc:id="b5d3d245-0c30-43ba-b110-de6195ae918c" >
+		<vm:queues >
+			<vm:queue queueName="employees" queueType="PERSISTENT" />
+		</vm:queues>
+	</vm:config>
+	
+	<http:request-config name="HTTP_Request_configuration" doc:name="HTTP Request configuration" doc:id="63c19a41-62d7-4dd4-8c16-ed75ae3ecaa1" >
+		<http:request-connection host="localhost" port="8081" />
+	</http:request-config>
+	
+	<flow name="client-app-paginationFlow" doc:id="30a84bcf-f76c-436a-8933-ab33cfd094e3" >
+		<http:listener doc:name="Listener" doc:id="027a91a0-2a96-4d45-8f1d-a1b6c10f5499" config-ref="HTTP_Listener_config" path="/client-pagination"/>
+		<logger level="INFO" doc:name="Start Logger" doc:id="a8facf56-f980-4eef-b9d2-3e7c59518de2" message='#["API Request received"]'/>
+		<ee:transform doc:name="limit, offset" doc:id="27127eb0-ca1d-444f-a54c-f2934b847603">
+			<ee:message>
+				<ee:set-payload ><![CDATA[%dw 2.4
+output application/java
+---
+{
+	offset: 0 as Number,
+	limit: 5 as Number,
+	employees: []
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="48c23c95-3a00-45d9-b0c4-ae99adcf6891" message='#["Starting consuming the GET /employees: first page call"]'/>
+		<flow-ref doc:name="get-employees" doc:id="32fa8347-e258-4cb5-b61f-d9b8e5c3df79" name="get-employees"/>
+		<ee:transform doc:name="Response" doc:id="023c7c81-b425-41dc-9a26-f35838b49277">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.4
+output application/json
+---
+payload.employees]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<logger level="INFO" doc:name="End Logger" doc:id="ab19da72-9895-41a8-8111-db7b062559a5" />
+		<error-handler >
+			<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="6cf6b32b-0d56-41b4-80dc-57e26d2ccc1f" >
+				<logger level="INFO" doc:name="Logger" doc:id="20add139-e4a4-40c3-bc01-403d42d94c03" message="error occured in client-app-paginationFlow: #[error.errorType] and errorMessage: #[error.errorMessage]"/>
+			</on-error-propagate>
+		</error-handler>
+	</flow>
+	<flow name="get-employees" doc:id="321fe219-569c-4f11-9dcc-2cabaeec9d77" >
+		<vm:listener doc:name="Listener" doc:id="c7059b38-caef-4e2a-b49d-a49a5fecd77b" config-ref="VM_Config" queueName="employees" timeout="60"/>
+		<http:request method="GET" doc:name="GET /employees" doc:id="f867d0a9-f128-42a7-a87c-88f2a784f696" config-ref="HTTP_Request_configuration" path="api/employees" sendCorrelationId="ALWAYS" outputMimeType="application/json" responseTimeout="60000" target="apiResponse">
+			<http:query-params ><![CDATA[#[output application/java 
+--- 
+{
+	limit: payload.limit, 
+	offset: payload.offset
+}]]]></http:query-params>
+		</http:request>
+		<ee:transform doc:name="payload" doc:id="75caa8ac-ad34-4f51-a509-9df2f04d908c">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.4
+output application/java
+--- 
+{
+	offset: payload.offset, 
+	limit: payload.limit,
+	employees: (payload.employees ++ vars.apiResponse.employees)
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+		<choice doc:name="Choice" doc:id="7bda01c0-1555-41a5-94a0-38acd64da0d8" >
+			<when expression="#[(vars.apiResponse.currentPage) &lt; (vars.apiResponse.totalPages)]">
+				<ee:transform doc:name="update offset" doc:id="002efdc2-e835-46de-a39e-065a799635b3" >
+					<ee:message >
+					</ee:message>
+					<ee:variables >
+						<ee:set-variable variableName="offset" ><![CDATA[%dw 2.4
+output application/java
+---
+(payload.offset as Number + payload.limit as Number) as Number]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+				<logger level="INFO" doc:name="Next Logger" doc:id="74711a70-a0f7-4f46-98cd-3d8bc9f77a49" message='#["Starting consuming the GET /employees: next page call with offset " ++ (vars.offset as String)]'/>
+				<vm:publish-consume queueName="employees" doc:name="Publish consume" doc:id="bb1918fc-9375-492d-9f47-a41930672b95" config-ref="VM_Config" correlationId="#[correlationId]" timeout="60" sendCorrelationId="ALWAYS">
+					<vm:content ><![CDATA[#[%dw 2.4
+import * from dw::util::Values
+output application/java
+---
+payload update "offset" with (vars.offset)]]]></vm:content>
+				</vm:publish-consume>
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="af875b57-4682-44a6-83f7-4c39a9953ce2" message='#["Consumed all the pages from GET /employees."]'/>
+			</otherwise>
+		</choice>
+	</flow>
+</mule>
